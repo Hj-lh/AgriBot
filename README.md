@@ -35,6 +35,26 @@ Backend/
 
 ---
 
+## 📋 System Prerequisites
+
+Before installing Python packages, install these system-level dependencies on the Raspberry Pi:
+
+```bash
+sudo apt update
+sudo apt install -y swig liblgpio-dev python3-dev python3-venv
+```
+
+| Package          | Why it's needed                                    |
+|------------------|----------------------------------------------------|
+| `swig`           | Required to build the `lgpio` Python wheel          |
+| `liblgpio-dev`   | C library for GPIO access (lgpio pin factory)       |
+| `python3-dev`    | Python headers for compiling native extensions      |
+| `python3-venv`   | Allows creating virtual environments                |
+
+> **Note:** These only need to be installed once on a fresh Raspberry Pi OS.
+
+---
+
 ## 🚀 Quick Start
 
 ### 1. Transfer to Raspberry Pi
@@ -45,7 +65,14 @@ Copy the entire `Backend/` folder to your Pi (e.g. via SCP):
 scp -r Backend/ pi@<pi-ip>:~/Desktop/
 ```
 
-### 2. Place your YOLO model
+### 2. Install system dependencies
+
+```bash
+sudo apt update
+sudo apt install -y swig liblgpio-dev python3-dev python3-venv
+```
+
+### 3. Place your YOLO model
 
 Copy `yolo11n.pt` (or your custom model) into `ai_models/`:
 
@@ -53,7 +80,7 @@ Copy `yolo11n.pt` (or your custom model) into `ai_models/`:
 cp yolo11n.pt ~/Desktop/Backend/ai_models/
 ```
 
-### 3. Run
+### 4. Run
 
 ```bash
 cd ~/Desktop/Backend
@@ -73,7 +100,7 @@ The script will:
 cd ~/Desktop/Backend
 source venv/bin/activate
 pip install -r requirements.txt
-uvicorn main:app --host 0.0.0.0 --port 8000
+python3 -m uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
 ---
