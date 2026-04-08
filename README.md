@@ -131,14 +131,21 @@ curl -X POST "http://<pi-ip>:8000/motor/stop"
 
 ### Camera
 
-| Method | Endpoint            | Description                     |
-|--------|---------------------|---------------------------------|
-| GET    | `/camera/feed`      | Live MJPEG video stream         |
-| GET    | `/camera/snapshot`   | Single JPEG frame               |
+| Method | Endpoint            | Parameters                    | Description                              |
+|--------|---------------------|-------------------------------|------------------------------------------|
+| GET    | `/camera/feed`      | `mode` (manual \| automatic)  | Live MJPEG video stream                  |
+| GET    | `/camera/snapshot`   | —                            | Single JPEG frame                        |
+
+- **`manual`** (default) — plain video stream
+- **`automatic`** — video stream with YOLO detection bounding boxes overlaid
 
 **Usage in HTML:**
 ```html
+<!-- Manual mode (plain video) -->
 <img src="http://<pi-ip>:8000/camera/feed" />
+
+<!-- Automatic mode (with AI detection boxes) -->
+<img src="http://<pi-ip>:8000/camera/feed?mode=automatic" />
 ```
 
 ### Water Pump

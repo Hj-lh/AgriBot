@@ -102,8 +102,11 @@ class MotorController:
     def stop(self):
         """Immediately stop both motors (neutral pulse)."""
         logger.info("Stop")
-        self.motor1_pwm.value = _NEUTRAL
-        self.motor2_pwm.value = _NEUTRAL
+        # self.motor1_pwm.value = _NEUTRAL
+        # self.motor2_pwm.value = _NEUTRAL
+        self.motor1_pwm.off()
+        self.motor2_pwm.off()
+        # SWITCH 6 Must be UP
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -147,3 +150,5 @@ if __name__ == "__main__":
         motor.stop()
     finally:
         motor.close()
+
+

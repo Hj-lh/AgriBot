@@ -10,6 +10,8 @@ Run with:  uvicorn main:app --host 0.0.0.0 --port 8000
 import logging
 from contextlib import asynccontextmanager
 
+import cv2
+
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -123,13 +125,31 @@ def stop_robot():
 # Camera
 # ==================================================================
 
-def _mjpeg_generator():
-    """Yield JPEG frames as an MJPEG stream."""
+def _mjpeg_generator(mode: str = "manual"):
+    """Yield JPEG frames as an MJPEG stream.
+    In 'automatic' mode, YOLO detection boxes are drawn on each frame.
+    """
     camera: RobotCamera = system["camera"]
+    detector: PlantDetector = system["ai"]
+    use_ai = mode == "automatic" and detector.enabled
+
     while True:
-        frame = camera.get_frame()
-        if frame is None:
-            continue
+        if use_ai:
+            # Get raw frame for AI processing
+            raw_frame = camera.get_raw_frame()
+            if raw_frame is None:
+                continue
+
+            detections = detector.detect(raw_frame)
+            annotated = detector.annotate_frame(raw_frame, detections)
+
+            _, jpeg = cv2.imencode(".jpg", annotated)
+            frame = jpeg.tobytes()
+        else:
+            frame = camera.get_frame()
+            if frame is None:
+                continue
+
         yield (
             b"--frame\r\n"
             b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
@@ -137,10 +157,12 @@ def _mjpeg_generator():
 
 
 @app.get("/camera/feed")
-def video_feed():
-    """Live MJPEG video stream."""
+def video_feed(
+    mode: str = Query("manual", description="manual | automatic"),
+):
+    """Live MJPEG video stream. Use mode=automatic for AI detection overlay."""
     return StreamingResponse(
-        _mjpeg_generator(),
+        _mjpeg_generator(mode),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
 
