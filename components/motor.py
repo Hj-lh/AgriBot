@@ -10,6 +10,7 @@ Two motors (GPIO 12 & 13) driven in R/C ESC mode:
 Motor 2 is physically mounted in reverse, so its signal
 is inverted internally — callers don't need to worry about it.
 """
+# Keep Switch 1 DOWN, Switch 2 UP, Switch 4 DOWN, and put Switch 6 DOWN.
 
 import logging
 from gpiozero import PWMOutputDevice
@@ -102,10 +103,10 @@ class MotorController:
     def stop(self):
         """Immediately stop both motors (neutral pulse)."""
         logger.info("Stop")
-        # self.motor1_pwm.value = _NEUTRAL
-        # self.motor2_pwm.value = _NEUTRAL
-        self.motor1_pwm.off()
-        self.motor2_pwm.off()
+        self.motor1_pwm.value = _NEUTRAL
+        self.motor2_pwm.value = _NEUTRAL
+        # self.motor1_pwm.off()
+        # self.motor2_pwm.off()
         # SWITCH 6 Must be UP
 
     # ------------------------------------------------------------------
@@ -115,6 +116,8 @@ class MotorController:
     def close(self):
         """Release GPIO resources."""
         self.stop()
+        from time import sleep
+        sleep(0.1)
         self.motor1_pwm.close()
         self.motor2_pwm.close()
         logger.info("MotorController closed")
