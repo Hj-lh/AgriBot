@@ -142,7 +142,7 @@ class AutoNavigator:
             else:
                 # No target found
                 logger.debug("Auto: No target -> Reversing to search")
-                self.motor.backward(AUTO_SPEED_BACKWARD)
+                self.motor.left(AUTO_SPEED_BACKWARD)
                 time.sleep(SLEEP_BACKWARD_DURATION)
                 self.motor.stop()
                 
