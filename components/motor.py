@@ -87,13 +87,13 @@ class MotorController:
         logger.info("Backward  speed=%.2f", speed)
         self._set_motors(-speed, -speed)
 
-    def left(self, speed: float = 0.5):
+    def right(self, speed: float = 0.5):
         """Pivot/turn left (right motor forward, left motor backward)."""
         speed = abs(speed)
         logger.info("Left  speed=%.2f", speed)
         self._set_motors(-speed, speed)
 
-    def right(self, speed: float = 0.5):
+    def left(self, speed: float = 0.5):
         """Pivot/turn right (left motor forward, right motor backward)."""
         speed = abs(speed)
         logger.info("Right  speed=%.2f", speed)
