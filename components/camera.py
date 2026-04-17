@@ -61,6 +61,7 @@ class RobotCamera:
         while self.running:
             ret, frame = self.cap.read()
             if ret:
+                frame = cv2.flip(frame, -1)
                 with self._frame_lock:
                     self.latest_frame = frame
             else:
