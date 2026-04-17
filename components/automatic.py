@@ -19,14 +19,23 @@ logger = logging.getLogger(__name__)
 env_path = os.path.join(os.path.dirname(__file__), ".env")
 load_dotenv(env_path)
 
-AUTO_SPEED_FORWARD = float(os.getenv("AUTO_SPEED_FORWARD", "0.8"))
-AUTO_SPEED_BACKWARD = float(os.getenv("AUTO_SPEED_BACKWARD", "0.8"))
-AUTO_SPEED_TURN = float(os.getenv("AUTO_SPEED_TURN", "0.6"))
+# AUTO_SPEED_FORWARD = float(os.getenv("AUTO_SPEED_FORWARD", "0.8"))
+# AUTO_SPEED_BACKWARD = float(os.getenv("AUTO_SPEED_BACKWARD", "0.8"))
+# AUTO_SPEED_TURN = float(os.getenv("AUTO_SPEED_TURN", "0.6"))
 
-SLEEP_TURN_DURATION = float(os.getenv("SLEEP_TURN_DURATION", "0.5"))
-SLEEP_FORWARD_DURATION = float(os.getenv("SLEEP_FORWARD_DURATION", "2.0"))
-SLEEP_BACKWARD_DURATION = float(os.getenv("SLEEP_BACKWARD_DURATION", "1.0"))
-SLEEP_WAIT_YOLO = float(os.getenv("SLEEP_WAIT_YOLO", "1.0"))
+AUTO_SPEED_FORWARD = 0.7
+AUTO_SPEED_BACKWARD = 0.7
+AUTO_SPEED_TURN = 0.9
+
+
+# SLEEP_TURN_DURATION = float(os.getenv("SLEEP_TURN_DURATION", "0.5"))
+# SLEEP_FORWARD_DURATION = float(os.getenv("SLEEP_FORWARD_DURATION", "2.0"))
+# SLEEP_BACKWARD_DURATION = float(os.getenv("SLEEP_BACKWARD_DURATION", "1.0"))
+# SLEEP_WAIT_YOLO = float(os.getenv("SLEEP_WAIT_YOLO", "1.0"))
+SLEEP_TURN_DURATION = 1
+SLEEP_FORWARD_DURATION = 1.5
+SLEEP_BACKWARD_DURATION = 2
+SLEEP_WAIT_YOLO = 2
 
 CENTER_MARGIN = 0.33  # Middle third
 
