@@ -20,6 +20,7 @@ from components.motor import MotorController
 from components.camera import RobotCamera
 from components.waterpump import WaterPumpController
 from components.ai import PlantDetector
+from components.automatic import AutoNavigator
 
 logging.basicConfig(
     level=logging.INFO,
@@ -41,11 +42,13 @@ async def lifespan(app: FastAPI):
     system["camera"] = RobotCamera()
     system["pump"] = WaterPumpController()
     system["ai"] = PlantDetector()
+    system["navigator"] = AutoNavigator(system["motor"], system["pump"])
     logger.info("All components ready ✔")
 
     yield  # ← app is running
 
     logger.info("Shutting down AgriBot components …")
+    system["navigator"].stop()
     system["motor"].close()
     system["camera"].close()
     system["pump"].close()
@@ -141,6 +144,10 @@ def _mjpeg_generator(mode: str = "manual"):
                 continue
 
             detections = detector.detect(raw_frame)
+            
+            if system["navigator"].is_active:
+                system["navigator"].update_detections(detections, raw_frame.shape[1])
+                
             annotated = detector.annotate_frame(raw_frame, detections)
 
             _, jpeg = cv2.imencode(".jpg", annotated)
@@ -161,6 +168,11 @@ def video_feed(
     mode: str = Query("manual", description="manual | automatic"),
 ):
     """Live MJPEG video stream. Use mode=automatic for AI detection overlay."""
+    if mode == "automatic":
+        system["navigator"].start()
+    else:
+        system["navigator"].stop()
+
     return StreamingResponse(
         _mjpeg_generator(mode),
         media_type="multipart/x-mixed-replace; boundary=frame",

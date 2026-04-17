@@ -13,12 +13,21 @@ import logging
 from pathlib import Path
 
 import cv2
+import os
+from dotenv import load_dotenv
 from ultralytics import YOLO
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_MODEL_PATH = Path(__file__).resolve().parent.parent / "ai_models" / "yolo11n.pt"
-_DEFAULT_CONFIDENCE = 0.5
+
+env_path = os.path.join(os.path.dirname(__file__), ".env")
+load_dotenv(env_path)
+
+_TARGET_CLASS = os.getenv("TARGET_CLASS", "plant")
+_USE_YOLO_WITH_TRACK = os.getenv("USE_YOLO_WITH_TRACK", "True").lower() == "true"
+# We lower the default confidence here since we rely on tracking to filter noise
+_DEFAULT_CONFIDENCE = 0.2
 
 
 class PlantDetector:
@@ -31,12 +40,27 @@ class PlantDetector:
     ):
         self.confidence = confidence
         self.enabled = False
+        
+        self.target_class_str = _TARGET_CLASS
+        self.use_track = _USE_YOLO_WITH_TRACK
+        self.target_class_ids = None
 
         logger.info("Loading YOLO model from %s …", model_path)
         try:
             self.model = YOLO(str(model_path))
             self.enabled = True
             logger.info("YOLO model loaded successfully")
+            
+            # Resolve target class ID
+            if self.target_class_str:
+                for cls_id, cls_name in self.model.names.items():
+                    if cls_name == self.target_class_str:
+                        self.target_class_ids = [cls_id]
+                        logger.info("Target class '%s' found with ID: %d", self.target_class_str, cls_id)
+                        break
+                if self.target_class_ids is None:
+                    logger.warning("Target class '%s' not found in model.", self.target_class_str)
+                    
         except Exception as e:
             logger.warning("Could not load YOLO model — AI disabled: %s", e)
 
@@ -59,16 +83,27 @@ class PlantDetector:
         if not self.enabled or frame is None:
             return []
 
-        results = self.model(frame, verbose=False, conf=self.confidence)
+        if self.use_track:
+            results = self.model.track(
+                frame, tracker="bytetrack.yaml", persist=True,
+                verbose=False, conf=self.confidence, classes=self.target_class_ids
+            )
+        else:
+            results = self.model(
+                frame, verbose=False, conf=self.confidence, classes=self.target_class_ids
+            )
+            
         result = results[0]
 
         detections = []
         for box in result.boxes:
-            detections.append({
+            det = {
                 "class": self.model.names[int(box.cls[0])],
                 "confidence": float(box.conf[0]),
                 "box": box.xyxy[0].tolist(),
-            })
+                "id": int(box.id[0]) if box.id is not None else None
+            }
+            detections.append(det)
 
         logger.debug("Detected %d object(s)", len(detections))
         return detections
@@ -83,7 +118,8 @@ class PlantDetector:
 
         for det in detections:
             x1, y1, x2, y2 = [int(v) for v in det["box"]]
-            label = f'{det["class"]} {det["confidence"]:.0%}'
+            id_str = f' [ID:{det["id"]}]' if det.get("id") is not None else ''
+            label = f'{det["class"]}{id_str} {det["confidence"]:.0%}'
 
             cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(

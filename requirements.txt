@@ -7,3 +7,4 @@ opencv-python-headless
 ultralytics
 gpiozero
 lgpio
+python-dotenv
