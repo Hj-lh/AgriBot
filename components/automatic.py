@@ -28,7 +28,7 @@ MOVE_FORWARD_DURATION = 1
 
 # After stopping, wait for YOLO to produce a fresh detection on the new view.
 # With 3–8 FPS, 1.5s gives at least 4–12 new frames to process.
-SLEEP_WAIT_YOLO = 1.5
+SLEEP_WAIT_YOLO = 2
 
 # How long to spin per scan tick when no target is visible
 SCAN_TURN_DURATION = 0.5
@@ -47,6 +47,7 @@ class AutoNavigator:
         self.latest_detections: list[dict] = []
         self.frame_width: int = 640
         self._lock = threading.Lock()
+        self._stop_event = threading.Event()
 
         self._scan_direction = 1  # +1 = left, -1 = right; flips each no-target tick
 
@@ -62,6 +63,7 @@ class AutoNavigator:
         logger.info("AutoNavigator starting...")
         self.motor.stop()
         self.pump.off()
+        self._stop_event.clear()
         self.is_active = True
         self._thread = threading.Thread(target=self._loop, daemon=True, name="auto-navigator")
         self._thread.start()
@@ -71,6 +73,7 @@ class AutoNavigator:
             return
         logger.info("AutoNavigator stopping...")
         self.is_active = False
+        self._stop_event.set()          # instantly wake the thread from any sleep
         if self._thread:
             self._thread.join(timeout=3.0)
         self.motor.stop()
@@ -82,6 +85,10 @@ class AutoNavigator:
         if obj_center_x > width * (1 - CENTER_MARGIN):
             return "RIGHT"
         return "CENTER"
+
+    def _sleep(self, duration: float) -> bool:
+        """Interruptible sleep. Returns True if we should stop."""
+        return self._stop_event.wait(timeout=duration)
 
     def _loop(self):
         while self.is_active:
@@ -102,17 +109,20 @@ class AutoNavigator:
                 if zone == "LEFT":
                     logger.debug("Auto: plant LEFT → turning left (%.2fs)", MOVE_TURN_DURATION)
                     self.motor.left(AUTO_SPEED_TURN)
-                    time.sleep(MOVE_TURN_DURATION)
+                    if self._sleep(MOVE_TURN_DURATION):
+                        break
 
                 elif zone == "RIGHT":
                     logger.debug("Auto: plant RIGHT → turning right (%.2fs)", MOVE_TURN_DURATION)
                     self.motor.right(AUTO_SPEED_TURN)
-                    time.sleep(MOVE_TURN_DURATION)
+                    if self._sleep(MOVE_TURN_DURATION):
+                        break
 
                 else:  # CENTER
                     logger.debug("Auto: plant CENTER → forward (%.2fs)", MOVE_FORWARD_DURATION)
                     self.motor.forward(AUTO_SPEED_FORWARD)
-                    time.sleep(MOVE_FORWARD_DURATION)
+                    if self._sleep(MOVE_FORWARD_DURATION):
+                        break
 
             else:
                 # No target — alternate left/right each tick to scan
@@ -121,10 +131,12 @@ class AutoNavigator:
                     self.motor.left(AUTO_SPEED_TURN)
                 else:
                     self.motor.right(AUTO_SPEED_TURN)
-                time.sleep(SCAN_TURN_DURATION)
+                if self._sleep(SCAN_TURN_DURATION):
+                    break
                 # self._scan_direction *= -1  # flip for next no-target tick
 
             # 4. Stop and wait for YOLO to catch up
             self.motor.stop()
             if self.is_active:
-                time.sleep(SLEEP_WAIT_YOLO)
+                if self._sleep(SLEEP_WAIT_YOLO):
+                    break
