@@ -57,6 +57,8 @@ class AutoNavigator:
         self._stop_event = threading.Event()
 
         self._scan_direction = 1  # +1 = left, -1 = right; flips each no-target tick
+        self._frames_without_target = 0
+        self._lost_threshold = 3  # allow ~3 empty frames before scanning
 
     def update_detections(self, detections: list[dict], frame_width: int, frame_height: int = 480):
         """Called constantly by the camera stream."""
@@ -120,6 +122,7 @@ class AutoNavigator:
 
             # 3. Move
             if best is not None:
+                self._frames_without_target = 0
                 x1, y1, x2, y2 = best["box"]
                 obj_center_x = (x1 + x2) / 2.0
                 zone = self._get_zone(obj_center_x, width)
@@ -156,8 +159,19 @@ class AutoNavigator:
                     if self._sleep(MOVE_FORWARD_DURATION):
                         break
 
+            elif self._frames_without_target < self._lost_threshold:
+                # Brief dropout — hold position, don't panic-scan
+                self._frames_without_target += 1
+                logger.debug("Auto: target lost briefly (%d/%d) — holding",
+                             self._frames_without_target, self._lost_threshold)
+                self.motor.stop()
+                if self._sleep(SLEEP_WAIT_YOLO):
+                    break
+                continue  # skip the stop+wait block at the bottom
+
             else:
-                # No target — alternate left/right each tick to scan
+                # Genuinely lost — scan
+                self._frames_without_target += 1  # keep counting so logs are useful
                 logger.debug("Auto: no target → scanning (direction=%d)", self._scan_direction)
                 if self._scan_direction > 0:
                     self.motor.left(AUTO_SPEED_TURN)
