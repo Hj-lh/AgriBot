@@ -146,7 +146,7 @@ def _mjpeg_generator(mode: str = "manual"):
             detections = detector.detect(raw_frame)
             
             if system["navigator"].is_active:
-                system["navigator"].update_detections(detections, raw_frame.shape[1])
+                system["navigator"].update_detections(detections, raw_frame.shape[1], raw_frame.shape[0])
                 
             annotated = detector.annotate_frame(raw_frame, detections)
 

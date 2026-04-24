@@ -35,6 +35,12 @@ SCAN_TURN_DURATION = 0.5
 
 CENTER_MARGIN = 0.33  # Middle third of the frame
 
+# When the plant's bounding box fills this fraction of the frame, we've arrived.
+# Tune this by testing — depends on camera FOV and desired stopping distance.
+ARRIVAL_AREA_RATIO = 0.3
+
+WATERING_DURATION = 5  # seconds to "water" (just logging for now)
+
 
 class AutoNavigator:
     def __init__(self, motor: MotorController, pump: WaterPumpController):
@@ -46,16 +52,18 @@ class AutoNavigator:
 
         self.latest_detections: list[dict] = []
         self.frame_width: int = 640
+        self.frame_height: int = 480
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
 
         self._scan_direction = 1  # +1 = left, -1 = right; flips each no-target tick
 
-    def update_detections(self, detections: list[dict], frame_width: int):
+    def update_detections(self, detections: list[dict], frame_width: int, frame_height: int = 480):
         """Called constantly by the camera stream."""
         with self._lock:
             self.latest_detections = list(detections)  # snapshot, not reference
             self.frame_width = frame_width
+            self.frame_height = frame_height
 
     def start(self):
         if self.is_active:
@@ -90,21 +98,45 @@ class AutoNavigator:
         """Interruptible sleep. Returns True if we should stop."""
         return self._stop_event.wait(timeout=duration)
 
+    def _is_arrived(self, box: list[float], frame_width: int, frame_height: int) -> bool:
+        """Check if the plant's bounding box is large enough to consider arrived."""
+        x1, y1, x2, y2 = box
+        box_area = (x2 - x1) * (y2 - y1)
+        frame_area = frame_width * frame_height
+        ratio = box_area / frame_area if frame_area > 0 else 0
+        logger.debug("Auto: box area ratio = %.2f (threshold=%.2f)", ratio, ARRIVAL_AREA_RATIO)
+        return ratio >= ARRIVAL_AREA_RATIO
+
     def _loop(self):
         while self.is_active:
             # 1. Snapshot latest detections
             with self._lock:
                 detections = list(self.latest_detections)
                 width = self.frame_width
+                height = self.frame_height
 
             # 2. Pick best detection
             best = max(detections, key=lambda d: d["confidence"]) if detections else None
 
             # 3. Move
             if best is not None:
-                x1, _, x2, _ = best["box"]
+                x1, y1, x2, y2 = best["box"]
                 obj_center_x = (x1 + x2) / 2.0
                 zone = self._get_zone(obj_center_x, width)
+
+                # Check if we've arrived (box is large enough)
+                if zone == "CENTER" and self._is_arrived([x1, y1, x2, y2], width, height):
+                    logger.info("Auto: ARRIVED at plant — watering...")
+                    self.motor.stop()
+                    # Simulate watering with logging
+                    for i in range(WATERING_DURATION):
+                        if not self.is_active:
+                            break
+                        logger.info("watering .. watering ... watering")
+                        if self._sleep(1.0):
+                            break
+                    logger.info("Auto: watering complete")
+                    break  # stop automatic mode after watering
 
                 if zone == "LEFT":
                     logger.debug("Auto: plant LEFT → turning left (%.2fs)", MOVE_TURN_DURATION)
@@ -118,7 +150,7 @@ class AutoNavigator:
                     if self._sleep(MOVE_TURN_DURATION):
                         break
 
-                else:  # CENTER
+                else:  # CENTER — not arrived yet, keep approaching
                     logger.debug("Auto: plant CENTER → forward (%.2fs)", MOVE_FORWARD_DURATION)
                     self.motor.forward(AUTO_SPEED_FORWARD)
                     if self._sleep(MOVE_FORWARD_DURATION):
