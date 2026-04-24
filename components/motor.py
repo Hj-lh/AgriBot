@@ -1,46 +1,25 @@
 """
 Motor Controller Component
 ==========================
-Differential-drive motor controller using PWM via gpiozero.
-Two motors (GPIO 12 & 13) driven in R/C ESC mode:
-  - 1.5 ms pulse (duty 0.075 at 50 Hz) = stop
-  - 1.0 ms pulse (duty 0.050) = full reverse
-  - 2.0 ms pulse (duty 0.100) = full forward
-
-Motor 2 is physically mounted in reverse, so its signal
-is inverted internally — callers don't need to worry about it.
+Differential-drive motor controller using Simplified Serial Mode.
+Communicates via hardware UART (GPIO 14 / /dev/serial0) at 9600 baud.
 """
 
 import logging
-from gpiozero import PWMOutputDevice
+import serial
 
 logger = logging.getLogger(__name__)
 
-# PWM constants (50 Hz → 20 ms period)
-_FREQUENCY = 50
-_NEUTRAL = 0.075        # 1.5 ms  → stop
-_RANGE = 0.025          # ±0.5 ms → full speed
-
-
 class MotorController:
-    """High-level differential-drive controller."""
+    """High-level differential-drive controller via Serial."""
 
-    def __init__(
-        self,
-        motor1_pin: int = 12,
-        motor2_pin: int = 13,
-        frequency: int = _FREQUENCY,
-    ):
-        self.motor1_pwm = PWMOutputDevice(
-            motor1_pin, frequency=frequency, initial_value=_NEUTRAL
-        )
-        self.motor2_pwm = PWMOutputDevice(
-            motor2_pin, frequency=frequency, initial_value=_NEUTRAL
-        )
-        logger.info(
-            "MotorController initialised  (M1=GPIO%d, M2=GPIO%d, %d Hz)",
-            motor1_pin, motor2_pin, frequency,
-        )
+    def __init__(self, port='/dev/serial0', baudrate=9600):
+        try:
+            self.ser = serial.Serial(port, baudrate, timeout=1)
+            logger.info("MotorController initialized via Serial (%s at %d baud)", port, baudrate)
+        except serial.SerialException as e:
+            logger.error("Failed to open serial port: %s", e)
+            raise
 
     # ------------------------------------------------------------------
     # Low-level helpers
@@ -49,80 +28,64 @@ class MotorController:
     def _set_motors(self, m1_speed: float, m2_speed: float):
         """
         Set individual motor speeds.
-
-        Parameters
-        ----------
-        m1_speed, m2_speed : float
-            –1.0 (full reverse) … 0 (stop) … +1.0 (full forward).
-            Motor 2 is inverted internally to match the physical mount.
+        m1_speed, m2_speed : -1.0 (reverse) to 1.0 (forward)
         """
         m1_speed = max(-1.0, min(1.0, m1_speed))
         m2_speed = max(-1.0, min(1.0, m2_speed))
 
-        # Motor 2 is mounted in reverse → negate its signal
-        m1_pulse = _NEUTRAL + (m1_speed * _RANGE)
-        m2_pulse = _NEUTRAL + (m2_speed * _RANGE)
+        # Motor 1: 1 (reverse) to 127 (forward), 64 is center/stop
+        m1_cmd = int(64 + (m1_speed * 63))
+        
+        # Motor 2: 128 (reverse) to 255 (forward), 192 is center/stop
+        # Negate m2_speed because the physical motor is mounted in reverse
+        m2_cmd = int(192 + (-m2_speed * 63))
 
-        self.motor1_pwm.value = m1_pulse
-        self.motor2_pwm.value = m2_pulse
+        # Write the two bytes directly to the Sabertooth
+        self.ser.write(bytes([m1_cmd, m2_cmd]))
 
-        logger.debug(
-            "Motors set  m1=%.2f (pulse %.4f)  m2=%.2f (pulse %.4f)",
-            m1_speed, m1_pulse, m2_speed, m2_pulse,
-        )
+        logger.debug("Motors set m1=%.2f (Cmd: %d) m2=%.2f (Cmd: %d)", 
+                     m1_speed, m1_cmd, m2_speed, m2_cmd)
 
     # ------------------------------------------------------------------
     # High-level movement API
     # ------------------------------------------------------------------
 
     def forward(self, speed: float = 0.5):
-        """Drive straight forward.  *speed* 0.0 – 1.0."""
         speed = abs(speed)
-        logger.info("Forward  speed=%.2f", speed)
+        logger.info("Forward speed=%.2f", speed)
         self._set_motors(speed, speed)
 
     def backward(self, speed: float = 0.5):
-        """Drive straight backward.  *speed* 0.0 – 1.0."""
         speed = abs(speed)
-        logger.info("Backward  speed=%.2f", speed)
+        logger.info("Backward speed=%.2f", speed)
         self._set_motors(-speed, -speed)
 
     def right(self, speed: float = 0.5):
-        """Pivot/turn left (right motor forward, left motor backward)."""
         speed = abs(speed)
-        logger.info("Left  speed=%.2f", speed)
-        self._set_motors(-speed, speed)
-
-    def left(self, speed: float = 0.5):
-        """Pivot/turn right (left motor forward, right motor backward)."""
-        speed = abs(speed)
-        logger.info("Right  speed=%.2f", speed)
+        logger.info("Right speed=%.2f", speed)
         self._set_motors(speed, -speed)
 
+    def left(self, speed: float = 0.5):
+        speed = abs(speed)
+        logger.info("Left speed=%.2f", speed)
+        self._set_motors(-speed, speed)
+
     def stop(self):
-        """Immediately stop both motors (neutral pulse)."""
+        """Send byte 0 to immediately shut down both motors."""
         logger.info("Stop")
-        # self.motor1_pwm.value = _NEUTRAL
-        # self.motor2_pwm.value = _NEUTRAL
-        self.motor1_pwm.off()
-        self.motor2_pwm.off()
-        # SWITCH 6 Must be UP
+        self.ser.write(bytes([0]))
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     def close(self):
-        """Release GPIO resources."""
         self.stop()
-        self.motor1_pwm.close()
-        self.motor2_pwm.close()
+        if hasattr(self, 'ser') and self.ser.is_open:
+            self.ser.close()
         logger.info("MotorController closed")
 
 
-# ------------------------------------------------------------------
-# Quick self-test (python -m components.motor)
-# ------------------------------------------------------------------
 if __name__ == "__main__":
     from time import sleep
 
@@ -150,5 +113,3 @@ if __name__ == "__main__":
         motor.stop()
     finally:
         motor.close()
-
-

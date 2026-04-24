@@ -8,3 +8,4 @@ ultralytics
 gpiozero
 lgpio
 python-dotenv
+pyserial
