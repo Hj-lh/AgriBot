@@ -19,7 +19,7 @@ from ultralytics import YOLO
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MODEL_PATH = Path(__file__).resolve().parent.parent / "ai_models" / "yolo11n.pt"
+_DEFAULT_MODEL_PATH = Path(__file__).resolve().parent.parent / "ai_models" / "yolo26n.onnx"
 
 env_path = os.path.join(os.path.dirname(__file__), ".env")
 load_dotenv(env_path)
