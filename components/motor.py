@@ -2,7 +2,7 @@
 Motor Controller Component
 ==========================
 Differential-drive motor controller using Simplified Serial Mode.
-Communicates via hardware UART (GPIO 14 / /dev/serial0) at 9600 baud.
+Communicates via hardware UART (GPIO 14 / /dev/ttyAMA0) at 9600 baud.
 """
 
 import logging
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class MotorController:
     """High-level differential-drive controller via Serial."""
 
-    def __init__(self, port='/dev/serial0', baudrate=9600):
+    def __init__(self, port='/dev/ttyAMA0', baudrate=9600):
         try:
             self.ser = serial.Serial(port, baudrate, timeout=1)
             logger.info("MotorController initialized via Serial (%s at %d baud)", port, baudrate)
@@ -37,8 +37,7 @@ class MotorController:
         m1_cmd = int(64 + (m1_speed * 63))
         
         # Motor 2: 128 (reverse) to 255 (forward), 192 is center/stop
-        # Negate m2_speed because the physical motor is mounted in reverse
-        m2_cmd = int(192 + (-m2_speed * 63))
+        m2_cmd = int(192 + (m2_speed * 63))
 
         # Write the two bytes directly to the Sabertooth
         self.ser.write(bytes([m1_cmd, m2_cmd]))
