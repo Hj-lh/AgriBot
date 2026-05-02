@@ -85,12 +85,12 @@ class PlantDetector:
 
         if self.use_track:
             results = self.model.track(
-                frame, imgsz=416, tracker="bytetrack.yaml", persist=True,
+                frame, imgsz=640, tracker="bytetrack.yaml", persist=True,
                 verbose=False, conf=self.confidence, classes=self.target_class_ids
             )
         else:
             results = self.model(
-                frame, imgsz=416, verbose=False, conf=self.confidence, classes=self.target_class_ids
+                frame, imgsz=640, verbose=False, conf=self.confidence, classes=self.target_class_ids
             )
             
         result = results[0]
