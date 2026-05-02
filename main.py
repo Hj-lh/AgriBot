@@ -43,6 +43,7 @@ async def lifespan(app: FastAPI):
     system["pump"] = WaterPumpController()
     system["ai"] = PlantDetector()
     system["navigator"] = AutoNavigator(system["motor"], system["pump"])
+    system["mode"] = "manual"
     logger.info("All components ready ✔")
 
     yield  # ← app is running
@@ -128,15 +129,17 @@ def stop_robot():
 # Camera
 # ==================================================================
 
-def _mjpeg_generator(mode: str = "manual"):
+def _mjpeg_generator():
     """Yield JPEG frames as an MJPEG stream.
-    In 'automatic' mode, YOLO detection boxes are drawn on each frame.
+    Checks system["mode"] on every frame so the stream adapts
+    dynamically when the mode is switched.
     """
     camera: RobotCamera = system["camera"]
     detector: PlantDetector = system["ai"]
-    use_ai = mode == "automatic" and detector.enabled
 
     while True:
+        use_ai = system["mode"] == "automatic" and detector.enabled
+
         if use_ai:
             # Get raw frame for AI processing
             raw_frame = camera.get_raw_frame()
@@ -144,10 +147,10 @@ def _mjpeg_generator(mode: str = "manual"):
                 continue
 
             detections = detector.detect(raw_frame)
-            
+
             if system["navigator"].is_active:
                 system["navigator"].update_detections(detections, raw_frame.shape[1], raw_frame.shape[0])
-                
+
             annotated = detector.annotate_frame(raw_frame, detections)
 
             _, jpeg = cv2.imencode(".jpg", annotated)
@@ -168,13 +171,14 @@ def video_feed(
     mode: str = Query("manual", description="manual | automatic"),
 ):
     """Live MJPEG video stream. Use mode=automatic for AI detection overlay."""
+    system["mode"] = mode
     if mode == "automatic":
         system["navigator"].start()
     else:
         system["navigator"].stop()
 
     return StreamingResponse(
-        _mjpeg_generator(mode),
+        _mjpeg_generator(),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
 

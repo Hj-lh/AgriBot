@@ -1,78 +1,71 @@
 """
 Motor Controller Component
 ==========================
-Differential-drive motor controller using Simplified Serial Mode.
-Communicates via hardware UART (GPIO 14 / /dev/ttyAMA0) at 9600 baud.
+Differential-drive motor controller using dual BTS7960 drivers.
+Communicates via hardware PWM using the gpiozero library.
 """
 
 import logging
-import serial
+from gpiozero import Robot
 
 logger = logging.getLogger(__name__)
 
 class MotorController:
-    """High-level differential-drive controller via Serial."""
+    """High-level differential-drive controller via PWM."""
 
-    def __init__(self, port='/dev/ttyAMA0', baudrate=9600):
-        try:
-            self.ser = serial.Serial(port, baudrate, timeout=1)
-            logger.info("MotorController initialized via Serial (%s at %d baud)", port, baudrate)
-        except serial.SerialException as e:
-            logger.error("Failed to open serial port: %s", e)
-            raise
-
-    # ------------------------------------------------------------------
-    # Low-level helpers
-    # ------------------------------------------------------------------
-
-    def _set_motors(self, m1_speed: float, m2_speed: float):
-        """
-        Set individual motor speeds.
-        m1_speed, m2_speed : -1.0 (reverse) to 1.0 (forward)
-        """
-        m1_speed = max(-1.0, min(1.0, m1_speed))
-        m2_speed = max(-1.0, min(1.0, m2_speed))
-
-        # Motor 1: 1 (reverse) to 127 (forward), 64 is center/stop
-        m1_cmd = int(64 + (m1_speed * 63))
+    def __init__(self, 
+                 left_fwd_pin=12, left_bwd_pin=13, 
+                 right_fwd_pin=22, right_bwd_pin=23,
+                 pwm_frequency=1000):
         
-        # Motor 2: 128 (reverse) to 255 (forward), 192 is center/stop
-        m2_cmd = int(192 + (m2_speed * 63))
-
-        # Write the two bytes directly to the Sabertooth
-        self.ser.write(bytes([m1_cmd, m2_cmd]))
-
-        logger.debug("Motors set m1=%.2f (Cmd: %d) m2=%.2f (Cmd: %d)", 
-                     m1_speed, m1_cmd, m2_speed, m2_cmd)
+        try:
+            # Initialize the differential drive robot
+            self.robot = Robot(left=(left_fwd_pin, left_bwd_pin), 
+                               right=(right_fwd_pin, right_bwd_pin))
+            
+            # OVERRIDE DEFAULT FREQUENCY (100Hz) TO PREVENT MOTOR WHINE
+            # Access the underlying PWMOutputDevice objects to set custom frequency
+            self.robot.left_motor.forward_device.frequency = pwm_frequency
+            self.robot.left_motor.backward_device.frequency = pwm_frequency
+            self.robot.right_motor.forward_device.frequency = pwm_frequency
+            self.robot.right_motor.backward_device.frequency = pwm_frequency
+            
+            logger.info("MotorController initialized for BTS7960 modules.")
+            logger.info(f"Pins: L({left_fwd_pin},{left_bwd_pin}) R({right_fwd_pin},{right_bwd_pin})")
+            logger.info(f"PWM Frequency set to: {pwm_frequency}Hz")
+            
+        except Exception as e:
+            logger.error("Failed to initialize BTS7960 PWM pins: %s", e)
+            raise
 
     # ------------------------------------------------------------------
     # High-level movement API
     # ------------------------------------------------------------------
 
     def forward(self, speed: float = 0.5):
-        speed = abs(speed)
+        speed = max(0.0, min(1.0, abs(speed)))
         logger.info("Forward speed=%.2f", speed)
-        self._set_motors(speed, speed)
+        self.robot.forward(speed)
 
     def backward(self, speed: float = 0.5):
-        speed = abs(speed)
+        speed = max(0.0, min(1.0, abs(speed)))
         logger.info("Backward speed=%.2f", speed)
-        self._set_motors(-speed, -speed)
+        self.robot.backward(speed)
 
     def right(self, speed: float = 0.5):
-        speed = abs(speed)
+        speed = max(0.0, min(1.0, abs(speed)))
         logger.info("Right speed=%.2f", speed)
-        self._set_motors(speed, -speed)
+        self.robot.right(speed)
 
     def left(self, speed: float = 0.5):
-        speed = abs(speed)
+        speed = max(0.0, min(1.0, abs(speed)))
         logger.info("Left speed=%.2f", speed)
-        self._set_motors(-speed, speed)
+        self.robot.left(speed)
 
     def stop(self):
-        """Send byte 0 to immediately shut down both motors."""
+        """Immediately shut down both motors."""
         logger.info("Stop")
-        self.ser.write(bytes([0]))
+        self.robot.stop()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -80,8 +73,8 @@ class MotorController:
 
     def close(self):
         self.stop()
-        if hasattr(self, 'ser') and self.ser.is_open:
-            self.ser.close()
+        if hasattr(self, 'robot'):
+            self.robot.close()
         logger.info("MotorController closed")
 
 
@@ -92,19 +85,19 @@ if __name__ == "__main__":
     motor = MotorController()
 
     try:
-        print("▶ Forward 80 % for 3 s")
+        print("▶ Forward 80% for 3 s")
         motor.forward(0.8)
         sleep(3)
 
-        print("▶ Backward 50 % for 3 s")
+        print("▶ Backward 50% for 3 s")
         motor.backward(0.5)
         sleep(3)
 
-        print("▶ Left turn 60 % for 2 s")
+        print("▶ Left turn 60% for 2 s")
         motor.left(0.6)
         sleep(2)
 
-        print("▶ Right turn 60 % for 2 s")
+        print("▶ Right turn 60% for 2 s")
         motor.right(0.6)
         sleep(2)
 
