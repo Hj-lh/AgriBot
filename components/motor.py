@@ -1,7 +1,8 @@
 """
 Motor Controller Component
 ==========================
-Differential-drive motor controller using Simplified Serial Mode.
+Differential-drive motor controller for Sabertooth 2x25 
+using Simplified Serial Mode.
 Communicates via hardware UART (GPIO 14 / /dev/ttyAMA0) at 9600 baud.
 """
 
@@ -11,7 +12,7 @@ import serial
 logger = logging.getLogger(__name__)
 
 class MotorController:
-    """High-level differential-drive controller via Serial."""
+    """High-level differential-drive controller via Sabertooth Serial."""
 
     def __init__(self, port='/dev/ttyAMA0', baudrate=9600):
         try:
@@ -30,17 +31,23 @@ class MotorController:
         Set individual motor speeds.
         m1_speed, m2_speed : -1.0 (reverse) to 1.0 (forward)
         """
+        # Clamp speeds between -1.0 and 1.0
         m1_speed = max(-1.0, min(1.0, m1_speed))
         m2_speed = max(-1.0, min(1.0, m2_speed))
 
+        # Calculate Sabertooth commands
         # Motor 1: 1 (reverse) to 127 (forward), 64 is center/stop
         m1_cmd = int(64 + (m1_speed * 63))
         
         # Motor 2: 128 (reverse) to 255 (forward), 192 is center/stop
         m2_cmd = int(192 + (m2_speed * 63))
 
-        # Write the two bytes directly to the Sabertooth
-        self.ser.write(bytes([m1_cmd, m2_cmd]))
+        # Ensure bounds just in case of floating point weirdness
+        m1_cmd = max(1, min(127, m1_cmd))
+        m2_cmd = max(128, min(255, m2_cmd))
+
+        # Write the two bytes to the Sabertooth safely using bytearray
+        self.ser.write(bytearray([m1_cmd, m2_cmd]))
 
         logger.debug("Motors set m1=%.2f (Cmd: %d) m2=%.2f (Cmd: %d)", 
                      m1_speed, m1_cmd, m2_speed, m2_cmd)
@@ -72,7 +79,7 @@ class MotorController:
     def stop(self):
         """Send byte 0 to immediately shut down both motors."""
         logger.info("Stop")
-        self.ser.write(bytes([0]))
+        self.ser.write(bytearray([0]))
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -92,19 +99,19 @@ if __name__ == "__main__":
     motor = MotorController()
 
     try:
-        print("▶ Forward 80 % for 3 s")
+        print("▶ Forward 80% for 3 s")
         motor.forward(0.8)
         sleep(3)
 
-        print("▶ Backward 50 % for 3 s")
+        print("▶ Backward 50% for 3 s")
         motor.backward(0.5)
         sleep(3)
 
-        print("▶ Left turn 60 % for 2 s")
+        print("▶ Left turn 60% for 2 s")
         motor.left(0.6)
         sleep(2)
 
-        print("▶ Right turn 60 % for 2 s")
+        print("▶ Right turn 60% for 2 s")
         motor.right(0.6)
         sleep(2)
 
