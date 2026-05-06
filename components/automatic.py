@@ -28,8 +28,8 @@ logger = logging.getLogger(__name__)
 env_path = os.path.join(os.path.dirname(__file__), ".env")
 load_dotenv(env_path)
 
-AUTO_SPEED_FORWARD = 0.6
-AUTO_SPEED_TURN    = 0.9
+AUTO_SPEED_FORWARD = 0.5
+AUTO_SPEED_TURN    = 0.5
 AUTO_SPEED_TURN_GENTLE = 0.25  # reduced speed when oscillating L↔R (never below 0.25)
 
 # How long to actually run the motors — keep turns SHORT so the robot
