@@ -70,6 +70,8 @@ class PlantDetector:
     # ------------------------------------------------------------------
 
     def detect(self, frame) -> list[dict]:
+        logger.info("detect() called - use_track=%s", self.use_track)
+
         """
         Run detection on a raw OpenCV frame.
 
