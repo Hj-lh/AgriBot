@@ -30,12 +30,12 @@ logger = logging.getLogger(__name__)
 
 # --- Speeds ---
 AUTO_SPEED_FORWARD     = 0.6
-AUTO_SPEED_TURN        = 0.9
+AUTO_SPEED_TURN        = 0.75
 AUTO_SPEED_TURN_GENTLE = 0.25
 MIN_TURN_SPEED         = 0.25
 
 # --- Durations (how long motors run per action) ---
-MOVE_TURN_DURATION    = 1.0
+MOVE_TURN_DURATION    = 2
 MOVE_FORWARD_DURATION = 1.0
 
 # --- After stopping, wait for fresh YOLO detections ---
@@ -43,13 +43,13 @@ MOVE_FORWARD_DURATION = 1.0
 SLEEP_WAIT_YOLO = 0.5
 
 # --- Scanning ---
-SCAN_TURN_DURATION = 1.0
+SCAN_TURN_DURATION = 2
 
 # --- Geometry ---
 CENTER_MARGIN = 0.33  # Middle third of the frame
 
 # --- Arrival ---
-ARRIVAL_AREA_RATIO = 0.3
+ARRIVAL_AREA_RATIO = 0.5
 
 # --- Watering ---
 WATERING_DURATION = 5  # seconds
