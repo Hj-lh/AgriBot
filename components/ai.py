@@ -89,13 +89,13 @@ class PlantDetector:
         if self.use_track:
             logger.warning("YOLO TRACK MODE")
             results = self.model.track(
-                frame, imgsz=640, tracker="bytetrack.yaml", persist=True,
+                frame, imgsz=416, tracker="bytetrack.yaml", persist=True,
                 verbose=False, conf=self.confidence, classes=self.target_class_ids
             )
         else:
             logger.warning("YOLO DETECT MODE")
             results = self.model(
-                frame, imgsz=640, verbose=False, conf=self.confidence, classes=self.target_class_ids
+                frame, imgsz=416, verbose=False, conf=self.confidence, classes=self.target_class_ids
             )
             
         result = results[0]
