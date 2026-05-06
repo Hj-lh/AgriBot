@@ -26,7 +26,7 @@ load_dotenv(env_path)
 
 _TARGET_CLASS = os.getenv("TARGET_CLASS", "plant")
 #_USE_YOLO_WITH_TRACK = os.getenv("USE_YOLO_WITH_TRACK", "True").lower() == "true"
-_USE_YOLO_WITH_TRACK = False
+_USE_YOLO_WITH_TRACK = True
 # We lower the default confidence here since we rely on tracking to filter noise
 _DEFAULT_CONFIDENCE = 0.2
 
@@ -70,7 +70,6 @@ class PlantDetector:
     # ------------------------------------------------------------------
 
     def detect(self, frame) -> list[dict]:
-        logger.info("detect() called - use_track=%s", self.use_track)
 
         """
         Run detection on a raw OpenCV frame.
@@ -87,13 +86,11 @@ class PlantDetector:
             return []
 
         if self.use_track:
-            logger.warning("YOLO TRACK MODE")
             results = self.model.track(
                 frame, imgsz=416, tracker="bytetrack.yaml", persist=True,
                 verbose=False, conf=self.confidence, classes=self.target_class_ids
             )
         else:
-            logger.warning("YOLO DETECT MODE")
             results = self.model(
                 frame, imgsz=416, verbose=False, conf=self.confidence, classes=self.target_class_ids
             )
