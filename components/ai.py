@@ -25,7 +25,8 @@ env_path = os.path.join(os.path.dirname(__file__), ".env")
 load_dotenv(env_path)
 
 _TARGET_CLASS = os.getenv("TARGET_CLASS", "plant")
-_USE_YOLO_WITH_TRACK = os.getenv("USE_YOLO_WITH_TRACK", "True").lower() == "true"
+#_USE_YOLO_WITH_TRACK = os.getenv("USE_YOLO_WITH_TRACK", "True").lower() == "true"
+_USE_YOLO_WITH_TRACK = False
 # We lower the default confidence here since we rely on tracking to filter noise
 _DEFAULT_CONFIDENCE = 0.2
 
