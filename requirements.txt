@@ -9,3 +9,4 @@ gpiozero
 lgpio
 python-dotenv
 pyserial
+requests

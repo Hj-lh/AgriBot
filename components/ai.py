@@ -109,23 +109,48 @@ class PlantDetector:
         logger.debug("Detected %d object(s)", len(detections))
         return detections
 
-    def annotate_frame(self, frame, detections: list[dict]):
+    def annotate_frame(
+        self,
+        frame,
+        detections: list[dict],
+        watered_ids: set[int] | None = None,
+        watering: bool = False,
+    ):
         """
         Draw bounding boxes and labels onto a frame copy.
+
+        Plants whose track ID is in ``watered_ids`` are drawn in blue and
+        labelled ``WATERED``; all others are drawn in green and labelled
+        ``NOT WATERED``. When ``watering`` is true a banner is overlaid
+        across the top of the frame.
 
         Returns the annotated frame (original is not modified).
         """
         annotated = frame.copy()
+        watered_ids = watered_ids or set()
 
         for det in detections:
             x1, y1, x2, y2 = [int(v) for v in det["box"]]
-            id_str = f' [ID:{det["id"]}]' if det.get("id") is not None else ''
-            label = f'{det["class"]}{id_str} {det["confidence"]:.0%}'
+            track_id = det.get("id")
+            is_watered = track_id is not None and track_id in watered_ids
 
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            color  = (255, 180, 0) if is_watered else (0, 255, 0)     # BGR
+            status = "WATERED" if is_watered else "NOT WATERED"
+            id_str = f' [ID:{track_id}]' if track_id is not None else ''
+            label  = f'{det["class"]}{id_str} - {status} {det["confidence"]:.0%}'
+
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
             cv2.putText(
-                annotated, label, (x1, y1 - 8),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2,
+                annotated, label, (x1, max(15, y1 - 8)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2,
+            )
+
+        if watering:
+            h, w = annotated.shape[:2]
+            cv2.rectangle(annotated, (0, 0), (w, 50), (0, 0, 0), -1)
+            cv2.putText(
+                annotated, "WATERING PLANT...", (15, 35),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 200, 255), 2,
             )
 
         return annotated

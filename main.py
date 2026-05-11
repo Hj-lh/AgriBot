@@ -18,8 +18,10 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from components.motor import MotorController
 from components.camera import RobotCamera
+from components.camera_control import CameraPTZController
 from components.waterpump import WaterPumpController
 from components.ai import PlantDetector
+from components.reid import PlantReID
 from components.automatic import AutoNavigator
 
 logging.basicConfig(
@@ -42,7 +44,18 @@ async def lifespan(app: FastAPI):
     system["camera"] = RobotCamera()
     system["pump"] = WaterPumpController()
     system["ai"] = PlantDetector()
-    system["navigator"] = AutoNavigator(system["motor"], system["pump"])
+    try:
+        system["ptz"] = CameraPTZController()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("PTZ camera control unavailable: %s", e)
+        system["ptz"] = None
+    system["reid"] = PlantReID()
+    system["navigator"] = AutoNavigator(
+        system["motor"],
+        system["pump"],
+        ptz=system["ptz"],
+        reid=system["reid"],
+    )
     logger.info("All components ready ✔")
 
     yield  # ← app is running
@@ -53,6 +66,8 @@ async def lifespan(app: FastAPI):
     system["camera"].close()
     system["pump"].close()
     system["ai"].close()
+    if system.get("ptz") is not None:
+        system["ptz"].close()
     logger.info("Shutdown complete")
 
 
@@ -83,6 +98,17 @@ def index():
             ],
             "pump": ["/pump/on", "/pump/off", "/pump/status"],
             "ai": ["/ai/detect"],
+            "ptz": [
+                "/camera/ptz/pan?angle=45",
+                "/camera/ptz/tilt?angle=-10",
+                "/camera/ptz/zoom?level=2000",
+                "/camera/ptz/move?pan_speed=50&tilt_speed=0",
+                "/camera/ptz/look?direction=right&degrees=90",
+                "/camera/ptz/center",
+                "/camera/ptz/home",
+                "/camera/ptz/stop",
+                "/camera/ptz/position",
+            ],
         },
     }
 
@@ -144,11 +170,22 @@ def _mjpeg_generator(mode: str = "manual"):
                 continue
 
             detections = detector.detect(raw_frame)
-            
-            if system["navigator"].is_active:
-                system["navigator"].update_detections(detections, raw_frame.shape[1], raw_frame.shape[0])
-                
-            annotated = detector.annotate_frame(raw_frame, detections)
+
+            navigator = system["navigator"]
+            if navigator.is_active:
+                navigator.update_detections(
+                    detections,
+                    raw_frame.shape[1],
+                    raw_frame.shape[0],
+                    frame=raw_frame,
+                )
+
+            annotated = detector.annotate_frame(
+                raw_frame,
+                detections,
+                watered_ids=navigator.watered_ids,
+                watering=navigator.is_watering,
+            )
 
             _, jpeg = cv2.imencode(".jpg", annotated)
             frame = jpeg.tobytes()
@@ -242,3 +279,156 @@ def ai_detect():
 
     detections = detector.detect(frame)
     return {"status": "ok", "count": len(detections), "detections": detections}
+
+
+# ==================================================================
+# Camera PTZ (pan / tilt / zoom)
+# ==================================================================
+
+def _ptz_or_503():
+    ptz: CameraPTZController | None = system.get("ptz")
+    if ptz is None or not ptz.enabled:
+        return None, JSONResponse(
+            status_code=503,
+            content={"status": "error", "message": "PTZ camera control not available"},
+        )
+    return ptz, None
+
+
+@app.post("/camera/ptz/pan")
+def ptz_pan(
+    angle: float = Query(..., ge=-180.0, le=180.0, description="Absolute pan in degrees"),
+):
+    """Pan the camera to an absolute angle."""
+    ptz, err = _ptz_or_503()
+    if err is not None:
+        return err
+    ok = ptz.pan(angle)
+    return {"status": "ok" if ok else "error", "pan": angle}
+
+
+@app.post("/camera/ptz/tilt")
+def ptz_tilt(
+    angle: float = Query(..., ge=-90.0, le=90.0, description="Absolute tilt in degrees"),
+):
+    """Tilt the camera to an absolute angle."""
+    ptz, err = _ptz_or_503()
+    if err is not None:
+        return err
+    ok = ptz.tilt(angle)
+    return {"status": "ok" if ok else "error", "tilt": angle}
+
+
+@app.post("/camera/ptz/zoom")
+def ptz_zoom(
+    level: int = Query(..., ge=1, le=9999, description="Absolute zoom 1..9999"),
+):
+    """Set absolute zoom level."""
+    ptz, err = _ptz_or_503()
+    if err is not None:
+        return err
+    ok = ptz.zoom(level)
+    return {"status": "ok" if ok else "error", "zoom": level}
+
+
+@app.post("/camera/ptz/move")
+def ptz_move(
+    pan_speed: int = Query(0, ge=-100, le=100, description="Continuous pan speed"),
+    tilt_speed: int = Query(0, ge=-100, le=100, description="Continuous tilt speed"),
+):
+    """Continuous PTZ motion until /camera/ptz/stop is called."""
+    ptz, err = _ptz_or_503()
+    if err is not None:
+        return err
+    ok = ptz.move_continuous(pan_speed, tilt_speed)
+    return {"status": "ok" if ok else "error", "pan_speed": pan_speed, "tilt_speed": tilt_speed}
+
+
+@app.post("/camera/ptz/stop")
+def ptz_stop():
+    """Stop any continuous PTZ motion."""
+    ptz, err = _ptz_or_503()
+    if err is not None:
+        return err
+    ok = ptz.stop_movement()
+    return {"status": "ok" if ok else "error"}
+
+
+@app.post("/camera/ptz/look")
+def ptz_look(
+    direction: str = Query(..., description="left | right | up | down | center"),
+    degrees: float = Query(90.0, ge=0.0, le=180.0),
+):
+    """Convenience helper: look left/right/up/down by a number of degrees."""
+    ptz, err = _ptz_or_503()
+    if err is not None:
+        return err
+
+    actions = {
+        "left":   lambda: ptz.look_left(degrees),
+        "right":  lambda: ptz.look_right(degrees),
+        "up":     lambda: ptz.look_up(degrees),
+        "down":   lambda: ptz.look_down(degrees),
+        "center": ptz.look_center,
+    }
+    action = actions.get(direction)
+    if action is None:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "message": f"Invalid direction: {direction}"},
+        )
+    ok = action()
+    return {"status": "ok" if ok else "error", "direction": direction, "degrees": degrees}
+
+
+@app.post("/camera/ptz/center")
+def ptz_center():
+    """Re-center pan to 0°."""
+    ptz, err = _ptz_or_503()
+    if err is not None:
+        return err
+    ok = ptz.look_center()
+    return {"status": "ok" if ok else "error"}
+
+
+@app.post("/camera/ptz/home")
+def ptz_home():
+    """Recall the camera's configured home preset."""
+    ptz, err = _ptz_or_503()
+    if err is not None:
+        return err
+    ok = ptz.home()
+    return {"status": "ok" if ok else "error"}
+
+
+@app.post("/camera/ptz/preset")
+def ptz_preset(
+    name: str | None = Query(None, description="Preset name configured in the camera"),
+    number: int | None = Query(None, ge=1, description="Preset index (1-based)"),
+):
+    """Recall a server preset position by name or by number."""
+    ptz, err = _ptz_or_503()
+    if err is not None:
+        return err
+    if name is None and number is None:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "message": "Provide either 'name' or 'number'"},
+        )
+    ok = ptz.goto_preset(name) if name is not None else ptz.goto_preset_number(number)
+    return {"status": "ok" if ok else "error", "name": name, "number": number}
+
+
+@app.get("/camera/ptz/position")
+def ptz_position():
+    """Return the current pan/tilt/zoom values reported by the camera."""
+    ptz, err = _ptz_or_503()
+    if err is not None:
+        return err
+    data = ptz.get_position()
+    if data is None:
+        return JSONResponse(
+            status_code=502,
+            content={"status": "error", "message": "Could not query PTZ position"},
+        )
+    return {"status": "ok", "position": data}
