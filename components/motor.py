@@ -14,7 +14,7 @@ class MotorController:
     """High-level differential-drive controller via PWM."""
 
     def __init__(self, 
-                 left_fwd_pin=12, left_bwd_pin=13, left_en_pin=5,
+                 left_fwd_pin=12, left_bwd_pin=13, left_en_pin=5, left_en_pin1=17, right_en_pin1=27,
                  right_fwd_pin=22, right_bwd_pin=23, right_en_pin=6,
                  pwm_frequency=1000):
         
@@ -23,18 +23,21 @@ class MotorController:
         # Adjust these values (0.0 to 1.0) to make the robot drive straight
         # --------------------------------------------------------------
         self.left_trim = 1.0
-        self.right_trim = 0.9 
+        self.right_trim = 1.0
         
         try:
             # 1. SETUP ENABLE PINS 
             # (Note: If you wired EN pins directly to 3.3V, you can ignore/delete this block)
             self.left_en = DigitalOutputDevice(left_en_pin)
             self.right_en = DigitalOutputDevice(right_en_pin)
+            self.left_en1 = DigitalOutputDevice(left_en_pin1)
+            self.right_en1 = DigitalOutputDevice(right_en_pin1)
             
             # Turn the motor drivers "ON" (Awake)
             self.left_en.on()
             self.right_en.on()
-
+            self.left_en1.on()
+            self.right_en1.on()
             # 2. SETUP PWM PINS
             self.robot = Robot(left=(left_fwd_pin, left_bwd_pin), 
                                right=(right_fwd_pin, right_bwd_pin))
@@ -108,7 +111,8 @@ class MotorController:
         if hasattr(self, 'left_en'):
             self.left_en.off()
             self.right_en.off()
-            
+            self.left_en1.off()
+            self.right_en1.off()
         if hasattr(self, 'robot'):
             self.robot.close()
             
