@@ -10,7 +10,7 @@ from gpiozero import OutputDevice
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_PIN = 17
+_DEFAULT_PIN = 25
 
 
 class WaterPumpController:
