@@ -6,17 +6,21 @@ Handles background autonomous navigation using YOLO detections.
 Key design:
   - The navigator consumes detections as soon as they arrive via a threading Event,
     so it never misses short-lived detections.
-  - Scan direction remembers where the target was last seen (left/right).
+  - Scan direction reflects where the plant was *most recently* seen.
+  - Turn durations are short — multiple loop iterations refine alignment
+    naturally without overshoot.
+  - When transitioning from a scan into tracking, the navigator stops and
+    re-evaluates with the next detection instead of stacking another turn.
 
 State machine:
-  SCANNING  → target detected       → TRACKING
-  TRACKING  → target in center      → APPROACHING
-  TRACKING  → target left/right     → TURNING
-  TRACKING  → target lost briefly   → HOLDING
+  SCANNING    → target detected     → STOP + re-evaluate (no double-turn)
+  TRACKING    → target in center    → APPROACHING
+  TRACKING    → target left/right   → TURNING (short)
+  TRACKING    → target lost briefly → HOLDING
   APPROACHING → box large enough    → WATERING
-  HOLDING   → target reappears      → TRACKING
-  HOLDING   → lost too long         → SCANNING
-  WATERING  → done                  → IDLE (loop exits)
+  HOLDING     → target reappears    → TRACKING
+  HOLDING     → lost too long       → SCANNING
+  WATERING    → done                → IDLE (loop exits)
 """
 
 import time
@@ -31,22 +35,23 @@ logger = logging.getLogger(__name__)
 # --- Speeds ---
 AUTO_SPEED_FORWARD     = 0.6
 AUTO_SPEED_TURN        = 0.75
-AUTO_SPEED_TURN_GENTLE = 0.25
-MIN_TURN_SPEED         = 0.25
+AUTO_SPEED_TURN_GENTLE = 0.375
+MIN_TURN_SPEED         = 0.375
 
 # --- Durations (how long motors run per action) ---
-MOVE_TURN_DURATION    = 2
+# Shortened from 2.0s → 0.5s to prevent overshoot.
+# Multiple loop iterations will refine alignment naturally.
+MOVE_TURN_DURATION    = 0.5
 MOVE_FORWARD_DURATION = 1.0
 
 # --- After stopping, wait for fresh YOLO detections ---
-# Reduced from 2.0 → 0.5 so the navigator reacts much faster
-SLEEP_WAIT_YOLO = 0.5
+SLEEP_WAIT_YOLO = 1.5
 
 # --- Scanning ---
-SCAN_TURN_DURATION = 2
+SCAN_TURN_DURATION = 1.0
 
 # --- Geometry ---
-CENTER_MARGIN = 0.33  # Middle third of the frame
+CENTER_MARGIN = 0.33  # Middle third of the frame is "CENTER"
 
 # --- Arrival ---
 ARRIVAL_AREA_RATIO = 0.5
@@ -74,11 +79,12 @@ class AutoNavigator:
 
         # Signals
         self._stop_event = threading.Event()
-        self._detection_event = threading.Event()  # NEW: wakes navigator when detections arrive
+        self._detection_event = threading.Event()
 
         # Navigation state
         self._frames_without_target = 0
-        self._last_known_zone: str = "LEFT"  # NEW: remember where target was last seen
+        self._last_known_zone: str = "LEFT"
+        self._just_finished_scan: bool = False  # Prevents double-turn after scan
 
         # Oscillation detection
         self._zone_history: list[str] = []
@@ -92,6 +98,7 @@ class AutoNavigator:
         """Reset all transient navigation state for a fresh run."""
         self._frames_without_target = 0
         self._last_known_zone = "LEFT"
+        self._just_finished_scan = False
         self._zone_history.clear()
         self._oscillating = False
         self._detection_event.clear()
@@ -107,7 +114,6 @@ class AutoNavigator:
             self.frame_width = frame_width
             self.frame_height = frame_height
 
-        # Wake the navigator immediately if there are detections
         if detections:
             self._detection_event.set()
 
@@ -133,7 +139,7 @@ class AutoNavigator:
         logger.info("AutoNavigator stopping...")
         self.is_active = False
         self._stop_event.set()
-        self._detection_event.set()  # Wake from any wait
+        self._detection_event.set()
         if self._thread:
             self._thread.join(timeout=3.0)
         self.motor.stop()
@@ -155,18 +161,8 @@ class AutoNavigator:
         return self._stop_event.wait(timeout=duration)
 
     def _wait_for_detections(self, timeout: float) -> bool:
-        """
-        Wait until new detections arrive OR timeout.
-        Returns True if we should stop (stop_event fired).
-        
-        This replaces the old blind sleep — the navigator wakes up
-        immediately when YOLO produces detections instead of sleeping
-        through them.
-        """
-        # Wait for either: detections arrive, or stop requested, or timeout
+        """Wait for new detections OR timeout. Returns True if stop requested."""
         self._detection_event.clear()
-        
-        # Use a loop to check stop_event while waiting for detections
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self._stop_event.is_set():
@@ -174,11 +170,9 @@ class AutoNavigator:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            # Wait for detection event with short timeout so we can check stop
             if self._detection_event.wait(timeout=min(remaining, 0.1)):
                 self._detection_event.clear()
                 break
-        
         return self._stop_event.is_set()
 
     def _is_arrived(self, box: list[float], frame_width: int, frame_height: int) -> bool:
@@ -243,12 +237,28 @@ class AutoNavigator:
                     obj_center_x = (x1 + x2) / 2.0
                     zone = self._get_zone(obj_center_x, width)
 
-                    # Remember where we last saw the target (for smart scanning)
-                    if zone != "CENTER":
-                        self._last_known_zone = zone
+                    # --- FIX FOR PROBLEM 3 ---
+                    # Always update last-known side based on actual position,
+                    # even when the plant is in the CENTER zone. This way the
+                    # scan direction always reflects the most recent sighting.
+                    if obj_center_x < width / 2.0:
+                        self._last_known_zone = "LEFT"
+                    else:
+                        self._last_known_zone = "RIGHT"
 
                     self._update_oscillation(zone)
                     turn_speed = self._get_turn_speed()
+
+                    # --- FIX FOR PROBLEM 1 ---
+                    # If we just finished a scan, don't immediately stack another
+                    # turn on top of it. Stop, settle, and re-evaluate next cycle.
+                    if self._just_finished_scan:
+                        logger.info("Auto: target acquired after scan — stopping to re-evaluate")
+                        self._just_finished_scan = False
+                        self.motor.stop()
+                        if self._wait_for_detections(SLEEP_WAIT_YOLO):
+                            break
+                        continue  # Fresh detections next iteration
 
                     # --- ARRIVED: water the plant ---
                     if zone == "CENTER" and self._is_arrived([x1, y1, x2, y2], width, height):
@@ -267,14 +277,16 @@ class AutoNavigator:
 
                     # --- TURN LEFT ---
                     if zone == "LEFT":
-                        logger.debug("Auto: plant LEFT → turning left (speed=%.2f)", turn_speed)
+                        logger.debug("Auto: plant LEFT → turning left (speed=%.2f, %.1fs)",
+                                     turn_speed, MOVE_TURN_DURATION)
                         self.motor.left(turn_speed)
                         if self._sleep(MOVE_TURN_DURATION):
                             break
 
                     # --- TURN RIGHT ---
                     elif zone == "RIGHT":
-                        logger.debug("Auto: plant RIGHT → turning right (speed=%.2f)", turn_speed)
+                        logger.debug("Auto: plant RIGHT → turning right (speed=%.2f, %.1fs)",
+                                     turn_speed, MOVE_TURN_DURATION)
                         self.motor.right(turn_speed)
                         if self._sleep(MOVE_TURN_DURATION):
                             break
@@ -291,32 +303,34 @@ class AutoNavigator:
                     if self._wait_for_detections(SLEEP_WAIT_YOLO):
                         break
 
-                # 4. Target lost briefly — hold position and wait for detections
+                # 4. Target lost briefly — hold and wait
                 elif self._frames_without_target < LOST_THRESHOLD:
                     self._frames_without_target += 1
                     logger.debug("Auto: target lost briefly (%d/%d) — holding",
                                  self._frames_without_target, LOST_THRESHOLD)
                     self.motor.stop()
-                    # Wait for detections to arrive — wake up immediately if they do
                     if self._wait_for_detections(SLEEP_WAIT_YOLO):
                         break
 
-                # 5. Target genuinely lost — scan in the direction we last saw it
+                # 5. Target genuinely lost — scan toward last-seen side
                 else:
                     self._frames_without_target += 1
-                    scan_direction = self._last_known_zone  # "LEFT" or "RIGHT"
+                    scan_direction = self._last_known_zone
 
                     if scan_direction == "RIGHT":
-                        logger.debug("Auto: no target → scanning RIGHT (last seen right)")
+                        logger.debug("Auto: scanning RIGHT (last seen on right)")
                         self.motor.right(AUTO_SPEED_TURN)
                     else:
-                        logger.debug("Auto: no target → scanning LEFT (last seen left)")
+                        logger.debug("Auto: scanning LEFT (last seen on left)")
                         self.motor.left(AUTO_SPEED_TURN)
 
                     if self._sleep(SCAN_TURN_DURATION):
                         break
 
-                    # Stop and wait for fresh detections
+                    # Mark scan complete — next detection cycle will stop
+                    # and re-evaluate instead of stacking another turn.
+                    self._just_finished_scan = True
+
                     self.motor.stop()
                     if self._wait_for_detections(SLEEP_WAIT_YOLO):
                         break
