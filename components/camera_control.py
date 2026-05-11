@@ -25,6 +25,7 @@ import threading
 import time
 
 import requests
+from requests.adapters import HTTPAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,19 @@ class CameraPTZController:
 
         self.session = requests.Session()
         self.session.auth = (user, password)  # AXIS 213 accepts Basic auth
+        # The AXIS 213 has a tiny HTTP socket budget — keep-alive sessions
+        # exhaust it within a few PTZ calls and the next request fails with
+        # urllib3 ``HTTPConnectionPool: Max retries exceeded``. Force a fresh
+        # single connection per request and let the camera close it.
+        self.session.headers.update({"Connection": "close"})
+        adapter = HTTPAdapter(
+            pool_connections=1,
+            pool_maxsize=1,
+            max_retries=0,
+            pool_block=True,
+        )
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
 
         self._lock = threading.Lock()
         self.enabled = False  # flipped True only if the probe succeeds
@@ -73,7 +87,14 @@ class CameraPTZController:
     # ------------------------------------------------------------------
 
     def _send(self, params: dict) -> bool:
-        """Send a VAPIX request. Returns True on HTTP 200, False otherwise."""
+        """Send a VAPIX request. Returns True on HTTP 200 **and** a non-error
+        body, False otherwise.
+
+        AXIS cameras frequently return HTTP 200 for unsupported commands and
+        signal the failure only via an ``# Error: ...`` line in the body —
+        which is exactly the silent-failure mode the AXIS 213 exhibits when
+        sent newer VAPIX-2 absolute commands like ``pan=<deg>``.
+        """
         if not self.enabled:
             return False
         try:
@@ -81,12 +102,27 @@ class CameraPTZController:
                 resp = self.session.get(
                     self.base_url, params=params, timeout=self.timeout
                 )
-            if 200 <= resp.status_code < 300:
-                logger.debug("PTZ ok %s | %s", params, resp.text[:80])
+            body = (resp.text or "").strip()
+            ok_status = 200 <= resp.status_code < 300
+            looks_like_error = body.lower().startswith(("error", "# error"))
+            if ok_status and not looks_like_error:
+                logger.info("PTZ ok %s | %s", params, body[:80] or "<empty>")
                 return True
             logger.warning(
-                "PTZ %s -> HTTP %d: %s", params, resp.status_code, resp.text[:100]
+                "PTZ %s -> HTTP %d (%s): %s",
+                params, resp.status_code,
+                "body-error" if looks_like_error else "http-error",
+                body[:160] or "<empty body>",
             )
+            return False
+        except requests.exceptions.ConnectionError as e:
+            logger.warning(
+                "PTZ connection error (camera busy / closed socket): %s",
+                str(e).split("\n", 1)[0][:160],
+            )
+            return False
+        except requests.exceptions.Timeout:
+            logger.warning("PTZ request timed out after %.1fs", self.timeout)
             return False
         except Exception as e:  # noqa: BLE001
             logger.error("PTZ request error: %s", e)
@@ -139,6 +175,43 @@ class CameraPTZController:
 
     def stop_movement(self) -> bool:
         return self._send({"camera": 1, "continuouspantiltmove": "0,0"})
+
+    def move_for(self, duration: float, pan_speed: int = 0, tilt_speed: int = 0) -> bool:
+        """Continuous pan/tilt for ``duration`` seconds, then auto-stop.
+
+        This is the AXIS-213-friendly equivalent of ``pan(<deg>)`` because
+        the 213's firmware doesn't accept absolute pan/tilt commands — only
+        ``continuouspantiltmove``. Speeds are in the range -100..100.
+        """
+        if not self.move_continuous(pan_speed, tilt_speed):
+            return False
+        try:
+            time.sleep(max(0.0, duration))
+        finally:
+            self.stop_movement()
+        return True
+
+    # Calibration: roughly how long the 213 takes to sweep 1° at speed 100.
+    # Re-tune by eye if your firmware/move-speed setting differs.
+    DEG_PER_SEC_AT_FULL = 60.0
+
+    def pan_by(self, degrees: float, speed: int = 60) -> bool:
+        """Pan by a *relative* angle using a timed continuous move.
+
+        Positive = right, negative = left. Use this on the AXIS 213
+        instead of :meth:`pan`, which the 213 firmware does not support.
+        """
+        speed = max(1, min(100, abs(int(speed))))
+        sign = 1 if degrees > 0 else -1
+        secs = abs(degrees) / (self.DEG_PER_SEC_AT_FULL * (speed / 100.0))
+        return self.move_for(secs, pan_speed=sign * speed, tilt_speed=0)
+
+    def tilt_by(self, degrees: float, speed: int = 60) -> bool:
+        """Tilt by a relative angle using a timed continuous move."""
+        speed = max(1, min(100, abs(int(speed))))
+        sign = 1 if degrees > 0 else -1
+        secs = abs(degrees) / (self.DEG_PER_SEC_AT_FULL * (speed / 100.0))
+        return self.move_for(secs, pan_speed=0, tilt_speed=sign * speed)
 
     # ------------------------------------------------------------------
     # Convenience presets

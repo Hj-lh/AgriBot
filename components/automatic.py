@@ -63,6 +63,14 @@ CAM_SWEEP_RIGHT =  90.0
 CAM_SWEEP_LEFT  = -90.0
 CAM_SWEEP_CENTER = 0.0
 
+# --- Stepped sweep tuning ---
+# Pan in small increments and pause at each one so YOLO has clean,
+# motion-blur-free frames to detect on. Tune for your camera speed.
+SWEEP_STEP_DEG       = 20.0   # how far to pan between detection checks
+SWEEP_STEP_PAUSE     = 1.2    # seconds to dwell at each step
+SWEEP_PAN_SPEED      = 25     # slower than the default 60 for steadier frames
+SWEEP_RECENTER_SPEED = 40     # slightly faster to return camera to centre
+
 # --- Geometry ---
 CENTER_MARGIN = 0.33  # Middle third of the frame is "CENTER"
 
@@ -434,46 +442,87 @@ class AutoNavigator:
     def _ptz_available(self) -> bool:
         return self.ptz is not None and getattr(self.ptz, "enabled", False)
 
+    def _sweep_side(self, direction: int, total_deg: float) -> tuple[str | None, float]:
+        """
+        Pan the camera ``total_deg`` to one side in ``SWEEP_STEP_DEG`` steps,
+        pausing at each step so YOLO can produce a clean detection.
+
+        ``direction``  +1 = right, -1 = left.
+        Returns ``(side, travelled)`` — ``side`` is "RIGHT" / "LEFT" if an
+        unwatered plant was seen, else None. ``travelled`` is the unsigned
+        degrees actually moved, so the caller can recentre by that amount.
+        """
+        side_name = "RIGHT" if direction > 0 else "LEFT"
+        travelled = 0.0
+
+        while travelled < total_deg:
+            step = min(SWEEP_STEP_DEG, total_deg - travelled)
+            logger.info(
+                "Auto: sweep %s — step %.0f° (total %.0f°/%.0f°)",
+                side_name, step, travelled + step, total_deg,
+            )
+            self.ptz.pan_by(direction * step, speed=SWEEP_PAN_SPEED)
+            travelled += step
+
+            # Dwell so YOLO produces motion-blur-free frames at this angle
+            if self._sleep(SWEEP_STEP_PAUSE):
+                return None, travelled  # stop requested
+
+            unwatered, _, _ = self._snapshot_unwatered()
+            if unwatered:
+                logger.info(
+                    "Auto: plant spotted on %s at sweep offset %.0f°",
+                    side_name, travelled,
+                )
+                return side_name, travelled
+
+        return None, travelled
+
     def _camera_sweep(self) -> str | None:
         """
         Pan the PTZ camera right → centre → left without moving the robot.
         Returns 'RIGHT' or 'LEFT' if an unwatered plant appears at that pan
         position, or None if nothing was seen.
+
+        Uses *relative* timed pans because the AXIS 213 firmware doesn't
+        accept absolute ``pan=<deg>`` commands — only ``continuouspantiltmove``.
+        Movement is stepped (``SWEEP_STEP_DEG``) with a dwell at each step so
+        the detector has clean frames to work with.
         """
         if not self._ptz_available():
             return None
 
-        # --- Look right ---
-        logger.info("Auto: camera sweep → right %.0f°", CAM_SWEEP_RIGHT)
-        self.ptz.pan(CAM_SWEEP_RIGHT)
-        if self._sleep(CAMERA_PAN_SETTLE):
+        right_deg = abs(CAM_SWEEP_RIGHT)
+        left_deg  = abs(CAM_SWEEP_LEFT)
+
+        # --- Sweep right step-by-step ---
+        side, travelled_right = self._sweep_side(+1, right_deg)
+        if self._stop_event.is_set():
+            self.ptz.pan_by(-travelled_right, speed=SWEEP_RECENTER_SPEED)
             return None
-        unwatered, _, _ = self._snapshot_unwatered()
-        if unwatered:
-            logger.info("Auto: plant spotted on RIGHT during camera sweep")
-            self.ptz.look_center()
+        if side is not None:
+            self.ptz.pan_by(-travelled_right, speed=SWEEP_RECENTER_SPEED)
             self._sleep(0.5)
-            return "RIGHT"
+            return side
 
-        # --- Back to centre ---
-        self.ptz.pan(CAM_SWEEP_CENTER)
-        if self._sleep(0.6):
+        # --- Recentre, then sweep left step-by-step ---
+        logger.info("Auto: sweep RIGHT finished without a hit — recentring")
+        self.ptz.pan_by(-travelled_right, speed=SWEEP_RECENTER_SPEED)
+        if self._sleep(0.5):
             return None
 
-        # --- Look left ---
-        logger.info("Auto: camera sweep → left %.0f°", CAM_SWEEP_LEFT)
-        self.ptz.pan(CAM_SWEEP_LEFT)
-        if self._sleep(CAMERA_PAN_SETTLE):
+        side, travelled_left = self._sweep_side(-1, left_deg)
+        if self._stop_event.is_set():
+            self.ptz.pan_by(+travelled_left, speed=SWEEP_RECENTER_SPEED)
             return None
-        unwatered, _, _ = self._snapshot_unwatered()
-        if unwatered:
-            logger.info("Auto: plant spotted on LEFT during camera sweep")
-            self.ptz.look_center()
+        if side is not None:
+            self.ptz.pan_by(+travelled_left, speed=SWEEP_RECENTER_SPEED)
             self._sleep(0.5)
-            return "LEFT"
+            return side
 
-        # --- Nothing seen ---
-        self.ptz.pan(CAM_SWEEP_CENTER)
+        # --- Nothing seen — return camera to centre ---
+        logger.info("Auto: sweep complete — nothing detected, recentring")
+        self.ptz.pan_by(+travelled_left, speed=SWEEP_RECENTER_SPEED)
         self._sleep(0.4)
         return None
 
